@@ -1,0 +1,15 @@
+[package]
+name = "turtle-goes-to-tea"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.15"
+
+# These speed up compile times significantly during development.
+# Bevy is a large crate — without these, first compile can take 5+ minutes.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

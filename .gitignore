@@ -1,0 +1,8 @@
+# Rust build artifacts — this folder gets large (often 1–2 GB for Bevy projects)
+/target
+
+# Windows thumbnail cache
+Thumbs.db
+
+# macOS folder metadata
+.DS_Store
