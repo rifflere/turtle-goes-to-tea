@@ -36,6 +36,15 @@ enum AppState {
 #[derive(Component)] struct WinRoot;
 #[derive(Component)] struct TitleText;
 
+// Tags the win-screen turtle so we can animate it each frame.
+#[derive(Component)] struct WinTurtle;
+
+// Tags individual steam puff entities so we can animate them.
+#[derive(Component)]
+struct SteamPuff {
+    offset: f32, // phase offset so puffs don't all move in sync
+}
+
 #[derive(Component)]
 struct MenuItem {
     index: usize,
@@ -73,7 +82,6 @@ impl Default for TurtleMovement {
     }
 }
 
-// Ticks at the sweet-zone midpoint (0.50 s) to guide the player's rhythm.
 #[derive(Resource)]
 struct BeepTimer {
     timer: Timer,
@@ -112,6 +120,11 @@ fn main() {
             Update,
             (menu_navigation, update_button_visuals, wobble_buttons)
                 .run_if(on_menu_or_win),
+        )
+        .add_systems(
+            Update,
+            (animate_win_turtle, animate_steam)
+                .run_if(in_state(AppState::Win)),
         )
         .add_systems(
             Update,
@@ -175,11 +188,17 @@ fn spawn_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
 }
 
 // ── Win screen ────────────────────────────────────────────────────────────────
-fn spawn_win_screen(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn spawn_win_screen(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
     commands.insert_resource(MenuNav { index: 0, max: 3 });
 
     let font = asset_server.load("fonts/whimsical.ttf");
 
+    // ── UI layer (title + buttons) ────────────────────────────────────────────
     commands
         .spawn((
             Node {
@@ -187,11 +206,12 @@ fn spawn_win_screen(mut commands: Commands, asset_server: Res<AssetServer>) {
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
+                justify_content: JustifyContent::FlexEnd,
                 row_gap: Val::Px(22.0),
+                padding: UiRect::bottom(Val::Px(48.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.14, 0.43, 0.14)),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
             WinRoot,
         ))
         .with_children(|root| {
@@ -204,7 +224,7 @@ fn spawn_win_screen(mut commands: Commands, asset_server: Res<AssetServer>) {
                 },
                 TextColor(Color::srgb(0.96, 0.82, 0.22)),
                 Node {
-                    margin: UiRect::bottom(Val::Px(36.0)),
+                    margin: UiRect::bottom(Val::Px(16.0)),
                     ..default()
                 },
             ));
@@ -213,6 +233,212 @@ fn spawn_win_screen(mut commands: Commands, asset_server: Res<AssetServer>) {
             spawn_button(root, "Main Menu", 1, ButtonAction::MainMenu, font.clone());
             spawn_button(root, "Exit", 2, ButtonAction::Exit, font.clone());
         });
+
+    // ── 2D scene background ───────────────────────────────────────────────────
+    // Sky
+    commands.spawn((
+        Mesh2d(meshes.add(Rectangle::new(WINDOW_WIDTH, WINDOW_HEIGHT / 2.0))),
+        MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.53, 0.81, 0.92)))),
+        Transform::from_xyz(0.0, WINDOW_HEIGHT / 4.0, -10.0),
+        WinRoot,
+    ));
+    // Ground
+    commands.spawn((
+        Mesh2d(meshes.add(Rectangle::new(WINDOW_WIDTH, WINDOW_HEIGHT / 2.0))),
+        MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.28, 0.62, 0.18)))),
+        Transform::from_xyz(0.0, -WINDOW_HEIGHT / 4.0, -10.0),
+        WinRoot,
+    ));
+
+    // ── Animated turtle holding a teacup ─────────────────────────────────────
+    // Sits in the upper-centre of the screen. The bob animation moves the
+    // whole parent entity up and down; the cup-arm children move independently.
+
+    let t_body  = materials.add(ColorMaterial::from(Color::srgb(0.20, 0.54, 0.12)));
+    let t_shell = materials.add(ColorMaterial::from(Color::srgb(0.11, 0.34, 0.05)));
+    let t_head  = materials.add(ColorMaterial::from(Color::srgb(0.26, 0.64, 0.16)));
+    let t_eye   = materials.add(ColorMaterial::from(Color::srgb(0.06, 0.06, 0.06)));
+    let t_smile = materials.add(ColorMaterial::from(Color::srgb(0.06, 0.06, 0.06)));
+
+    // Teacup colours
+    let c_porcelain = materials.add(ColorMaterial::from(Color::srgb(0.95, 0.92, 0.87)));
+    let c_shadow    = materials.add(ColorMaterial::from(Color::srgb(0.76, 0.73, 0.68)));
+    let c_tea_col   = materials.add(ColorMaterial::from(Color::srgb(0.52, 0.28, 0.07)));
+
+    // Steam
+    let steam_col = materials.add(ColorMaterial::from(Color::srgba(0.95, 0.95, 0.95, 0.7)));
+
+    // Scale up compared to the gameplay turtle (1.6×)
+    let s = 1.6_f32;
+
+    commands
+        .spawn((
+            Transform::from_xyz(0.0, 40.0, 0.0),
+            Visibility::default(),
+            WinTurtle,
+            WinRoot,
+        ))
+        .with_children(|p| {
+            // ── Body parts (facing right, upright) ───────────────────────────
+            // Back legs
+            for (x, y, angle) in [
+                (-18.0_f32 * s, -28.0 * s, 0.35_f32),
+                ( -6.0 * s,     -28.0 * s, 0.15),
+            ] {
+                p.spawn((
+                    Mesh2d(meshes.add(Ellipse::new(5.0 * s, 11.0 * s))),
+                    MeshMaterial2d(t_body.clone()),
+                    Transform::from_xyz(x, y, -0.1)
+                        .with_rotation(Quat::from_rotation_z(angle)),
+                ));
+            }
+            // Tail
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(6.0 * s, 4.0 * s))),
+                MeshMaterial2d(t_body.clone()),
+                Transform::from_xyz(-34.0 * s, -4.0 * s, -0.1),
+            ));
+            // Body
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(28.0 * s, 18.0 * s))),
+                MeshMaterial2d(t_body.clone()),
+                Transform::from_xyz(0.0, 0.0, 0.0),
+            ));
+            // Shell
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(22.0 * s, 15.0 * s))),
+                MeshMaterial2d(t_shell.clone()),
+                Transform::from_xyz(-2.0 * s, 6.0 * s, 0.1),
+            ));
+            // Front leg raised to hold cup — angled upward
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(5.0 * s, 11.0 * s))),
+                MeshMaterial2d(t_body.clone()),
+                Transform::from_xyz(20.0 * s, 4.0 * s, 0.2)
+                    .with_rotation(Quat::from_rotation_z(-1.1)),
+            ));
+            // Second front leg (lower, for stability)
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(5.0 * s, 11.0 * s))),
+                MeshMaterial2d(t_body.clone()),
+                Transform::from_xyz(14.0 * s, -26.0 * s, -0.1)
+                    .with_rotation(Quat::from_rotation_z(-0.2)),
+            ));
+            // Neck
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(8.0 * s, 7.0 * s))),
+                MeshMaterial2d(t_body.clone()),
+                Transform::from_xyz(24.0 * s, 10.0 * s, 0.05),
+            ));
+            // Head — tilted up slightly (happy sip pose)
+            p.spawn((
+                Mesh2d(meshes.add(Circle::new(13.0 * s))),
+                MeshMaterial2d(t_head.clone()),
+                Transform::from_xyz(32.0 * s, 18.0 * s, 0.0),
+            ));
+            // Eye — closed/squinting for happiness (thin ellipse)
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(4.0 * s, 1.5 * s))),
+                MeshMaterial2d(t_eye.clone()),
+                Transform::from_xyz(38.0 * s, 22.0 * s, 0.2),
+            ));
+            // Smile — small arc approximated as a rotated thin ellipse
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(5.0 * s, 1.8 * s))),
+                MeshMaterial2d(t_smile.clone()),
+                Transform::from_xyz(36.0 * s, 13.0 * s, 0.2)
+                    .with_rotation(Quat::from_rotation_z(0.3)),
+            ));
+
+            // ── Teacup held in raised leg ─────────────────────────────────
+            // Cup body
+            p.spawn((
+                Mesh2d(meshes.add(Rectangle::new(22.0 * s, 28.0 * s))),
+                MeshMaterial2d(c_porcelain.clone()),
+                Transform::from_xyz(36.0 * s, 20.0 * s, 0.3),
+            ));
+            // Cup rim
+            p.spawn((
+                Mesh2d(meshes.add(Rectangle::new(26.0 * s, 5.0 * s))),
+                MeshMaterial2d(c_shadow.clone()),
+                Transform::from_xyz(36.0 * s, 33.0 * s, 0.4),
+            ));
+            // Tea surface
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(9.0 * s, 3.5 * s))),
+                MeshMaterial2d(c_tea_col.clone()),
+                Transform::from_xyz(36.0 * s, 31.0 * s, 0.5),
+            ));
+            // Cup handle (small rectangle to the right)
+            p.spawn((
+                Mesh2d(meshes.add(Rectangle::new(4.0 * s, 14.0 * s))),
+                MeshMaterial2d(c_porcelain.clone()),
+                Transform::from_xyz(48.0 * s, 20.0 * s, 0.25),
+            ));
+            // Saucer
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(18.0 * s, 4.0 * s))),
+                MeshMaterial2d(c_shadow.clone()),
+                Transform::from_xyz(36.0 * s, 6.0 * s, 0.3),
+            ));
+
+            // ── Steam puffs above the cup ─────────────────────────────────
+            for (i, dx) in [-6.0_f32, 0.0, 6.0].iter().enumerate() {
+                p.spawn((
+                    Mesh2d(meshes.add(Circle::new(4.5 * s))),
+                    MeshMaterial2d(steam_col.clone()),
+                    Transform::from_xyz(
+                        (36.0 + dx) * s,
+                        44.0 * s,
+                        0.6,
+                    ),
+                    SteamPuff { offset: i as f32 * 0.7 },
+                ));
+            }
+        });
+}
+
+// ── Win screen animations ─────────────────────────────────────────────────────
+
+// Bobs the whole turtle gently up and down and rocks it side to side.
+fn animate_win_turtle(
+    time: Res<Time>,
+    mut query: Query<&mut Transform, With<WinTurtle>>,
+) {
+    let t = time.elapsed_secs();
+    for mut transform in &mut query {
+        let bob  = (t * 2.2).sin() * 6.0;
+        let rock = (t * 2.2).sin() * 0.04;
+        transform.translation.y = 40.0 + bob;
+        transform.rotation = Quat::from_rotation_z(rock);
+    }
+}
+
+// Floats steam puffs upward in a loop, fading as they rise.
+fn animate_steam(
+    time: Res<Time>,
+    mut query: Query<(&mut Transform, &SteamPuff)>,
+) {
+    let t = time.elapsed_secs();
+    for (mut transform, puff) in &mut query {
+        // Each puff oscillates on its own phase so they stagger nicely.
+        let phase = (t * 1.4 + puff.offset) % 1.0;
+        let rise  = phase * 28.0; // drifts up 28 px over its cycle
+        let sway  = ((t * 2.0 + puff.offset) * 1.5).sin() * 5.0;
+        // Base position is set relative to the turtle parent, so we only
+        // touch y and x here — the parent transform handles world placement.
+        let base_x = match puff.offset as u32 {
+            0 => -6.0,
+            1 =>  0.0,
+            _ =>  6.0,
+        } * 1.6;
+        let base_y = 44.0 * 1.6;
+        transform.translation.x = base_x + sway;
+        transform.translation.y = base_y + rise;
+        // Scale down as they rise (fade via shrink since we can't easily alpha-animate)
+        let shrink = 1.0 - phase * 0.7;
+        transform.scale = Vec3::splat(shrink);
+    }
 }
 
 fn spawn_button(
@@ -337,9 +563,6 @@ fn menu_navigation(
 }
 
 // ── Backdrop ──────────────────────────────────────────────────────────────────
-
-// Evaluates the road's vertical position at a given x.
-// Two low-frequency sine waves give a gentle, natural undulation.
 fn road_y_at(x: f32) -> f32 {
     (x * 0.008).sin() * 12.0 + (x * 0.020).sin() * 5.0
 }
@@ -369,9 +592,6 @@ fn spawn_backdrop(
     ));
 
     // ── Dirt road ────────────────────────────────────────────────────────────
-    // Approximated as a series of overlapping short rectangles, each rotated
-    // to follow the local slope of road_y_at(). Sits at z = -8 so it's above
-    // the ground quad (-10) and grass (-9) but behind the turtle/tea (0+).
     let road_color      = materials.add(ColorMaterial::from(Color::srgb(0.52, 0.36, 0.18)));
     let road_edge_color = materials.add(ColorMaterial::from(Color::srgb(0.42, 0.28, 0.12)));
 
@@ -392,7 +612,6 @@ fn spawn_backdrop(
         let t     = Transform::from_xyz(mid_x, cy, -8.0)
             .with_rotation(Quat::from_rotation_z(angle));
 
-        // Main dirt fill
         commands.spawn((
             Mesh2d(meshes.add(Rectangle::new(seg_len + seg_overlap, road_width))),
             MeshMaterial2d(road_color.clone()),
@@ -400,13 +619,10 @@ fn spawn_backdrop(
             GameEntity,
         ));
 
-        // Darker edge strips along the top and bottom of the road
         let offset = (road_width - edge_width) / 2.0;
-
         let mut edge_top = t;
         edge_top.translation.y += angle.cos() * offset;
         edge_top.translation.x -= angle.sin() * offset;
-
         let mut edge_bot = t;
         edge_bot.translation.y -= angle.cos() * offset;
         edge_bot.translation.x += angle.sin() * offset;
@@ -424,25 +640,20 @@ fn spawn_backdrop(
     }
 
     // ── Clouds ───────────────────────────────────────────────────────────────
-    // Each cloud is a cluster of overlapping ellipses spawned as children of
-    // an invisible parent. z = -9.5 puts them in front of the sky but behind
-    // the grass strip.
     let cloud_color = materials.add(ColorMaterial::from(Color::srgb(0.97, 0.97, 0.98)));
 
-    // (centre_x, centre_y, scale)
     let cloud_defs: &[(f32, f32, f32)] = &[
         (-280.0, 180.0, 1.0),
         (  60.0, 210.0, 0.75),
         ( 260.0, 155.0, 1.2),
     ];
 
-    // Per-cloud puff offsets: (dx, dy, rx, ry)
     let puffs: &[(f32, f32, f32, f32)] = &[
-        (  0.0,  0.0, 38.0, 22.0), // main body
-        (-30.0, -6.0, 26.0, 17.0), // left lobe
-        ( 30.0, -4.0, 28.0, 18.0), // right lobe
-        (-14.0, 10.0, 22.0, 13.0), // left top bump
-        ( 14.0, 12.0, 24.0, 14.0), // right top bump
+        (  0.0,  0.0, 38.0, 22.0),
+        (-30.0, -6.0, 26.0, 17.0),
+        ( 30.0, -4.0, 28.0, 18.0),
+        (-14.0, 10.0, 22.0, 13.0),
+        ( 14.0, 12.0, 24.0, 14.0),
     ];
 
     for &(cx, cy, scale) in cloud_defs {
@@ -502,8 +713,6 @@ fn spawn_game(
 ) {
     *movement = TurtleMovement::default();
 
-    // Start the rhythm beep. The sweet-zone midpoint is (0.30 + 0.70) / 2 = 0.50 s,
-    // so the beep fires at exactly the pace the player should be tapping.
     commands.insert_resource(BeepTimer {
         timer: Timer::from_seconds(0.50, TimerMode::Repeating),
     });
@@ -632,8 +841,6 @@ fn spawn_game(
 }
 
 // ── Beep ──────────────────────────────────────────────────────────────────────
-// Uses Bevy's built-in Pitch asset — a pure sine tone at a given frequency and
-// duration. No sound file needed. The entity despawns itself when playback ends.
 fn play_beep(
     mut commands: Commands,
     time: Res<Time>,
@@ -645,7 +852,7 @@ fn play_beep(
             AudioPlayer(pitch_assets.add(Pitch::new(399.0, Duration::from_millis(80)))),
             PlaybackSettings {
                 mode: bevy::audio::PlaybackMode::Despawn,
-                volume: bevy::audio::Volume::new(0.2), // 0.0 = silent, 1.0 = full volume
+                volume: bevy::audio::Volume::new(0.2),
                 ..default()
             },
             GameEntity,
@@ -706,7 +913,6 @@ fn move_turtle(
         .x
         .clamp(-half + TURTLE_RADIUS, half - TURTLE_RADIUS);
 
-    // Snap turtle's y to the road surface so it follows the curve.
     transform.translation.y = road_y_at(transform.translation.x);
 }
 
