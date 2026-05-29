@@ -344,6 +344,12 @@ fn menu_navigation(
 }
 
 // ── Backdrop ──────────────────────────────────────────────────────────────────
+// Evaluates the road's vertical position at a given x.
+// Two low-frequency sine waves give a gentle, natural undulation.
+fn road_y_at(x: f32) -> f32 {
+    (x * 0.008).sin() * 12.0 + (x * 0.020).sin() * 5.0
+}
+
 fn spawn_backdrop(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
@@ -352,7 +358,7 @@ fn spawn_backdrop(
     let half_w = WINDOW_WIDTH;
     let half_h = WINDOW_HEIGHT / 2.0;
 
-    // Sky — top half
+    // ── Sky ──────────────────────────────────────────────────────────────────
     commands.spawn((
         Mesh2d(meshes.add(Rectangle::new(half_w, half_h))),
         MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.53, 0.81, 0.92)))),
@@ -360,13 +366,108 @@ fn spawn_backdrop(
         GameEntity,
     ));
 
-    // Ground — bottom half (matches ClearColor so there's never a seam)
+    // ── Ground ───────────────────────────────────────────────────────────────
     commands.spawn((
         Mesh2d(meshes.add(Rectangle::new(half_w, half_h))),
-        MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.22, 0.60, 0.22)))),
+        MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.28, 0.62, 0.18)))),
         Transform::from_xyz(0.0, -half_h / 2.0, -10.0),
         GameEntity,
     ));
+
+    // ── Dirt road ────────────────────────────────────────────────────────────
+    // Approximated as a series of overlapping short rectangles, each rotated
+    // to follow the local slope of road_y_at(). Sits at z = -8 so it's above
+    // the ground quad (-10) and grass (-9) but behind the turtle/tea (0+).
+    let road_color = materials.add(ColorMaterial::from(Color::srgb(0.52, 0.36, 0.18)));
+    let road_edge_color = materials.add(ColorMaterial::from(Color::srgb(0.42, 0.28, 0.12)));
+
+    let road_width: f32  = 90.0;
+    let edge_width: f32  = 6.0;
+    let seg_len: f32     = 14.0;
+    let seg_overlap: f32 = 2.0;
+
+    let road_start_x = -(WINDOW_WIDTH / 2.0) - seg_len;
+    let road_end_x   =   WINDOW_WIDTH / 2.0  + seg_len;
+    let mut rx = road_start_x;
+
+    while rx < road_end_x {
+        let mid_x = rx + seg_len * 0.5;
+        let dy    = road_y_at(rx + 1.0) - road_y_at(rx);
+        let angle = dy.atan2(1.0);
+        let cy    = road_y_at(mid_x);
+        let t     = Transform::from_xyz(mid_x, cy, -8.0)
+            .with_rotation(Quat::from_rotation_z(angle));
+
+        // Main dirt fill
+        commands.spawn((
+            Mesh2d(meshes.add(Rectangle::new(seg_len + seg_overlap, road_width))),
+            MeshMaterial2d(road_color.clone()),
+            t,
+            GameEntity,
+        ));
+
+        // Darker edge strips along the top and bottom of the road
+        let offset = (road_width - edge_width) / 2.0;
+
+        let mut edge_top = t;
+        edge_top.translation.y += angle.cos() * offset;
+        edge_top.translation.x -= angle.sin() * offset;
+
+        let mut edge_bot = t;
+        edge_bot.translation.y -= angle.cos() * offset;
+        edge_bot.translation.x += angle.sin() * offset;
+
+        for edge_t in [edge_top, edge_bot] {
+            commands.spawn((
+                Mesh2d(meshes.add(Rectangle::new(seg_len + seg_overlap, edge_width))),
+                MeshMaterial2d(road_edge_color.clone()),
+                edge_t,
+                GameEntity,
+            ));
+        }
+
+        rx += seg_len;
+    }
+
+    // ── Clouds ───────────────────────────────────────────────────────────────
+    // Each cloud is a cluster of overlapping ellipses spawned as children of
+    // an invisible parent so the whole thing moves as one unit.
+    // z = -9.5 puts clouds behind the grass strip but in front of the sky quad.
+    let cloud_color = materials.add(ColorMaterial::from(Color::srgb(0.97, 0.97, 0.98)));
+
+    // (centre_x, centre_y, scale) — y is in the upper half of the screen
+    let cloud_defs: &[(f32, f32, f32)] = &[
+        (-280.0, 180.0, 1.0),
+        (  60.0, 210.0, 0.75),
+        ( 260.0, 155.0, 1.2),
+    ];
+
+    // Puff offsets relative to each cloud centre: (dx, dy, rx, ry)
+    let puffs: &[(f32, f32, f32, f32)] = &[
+        (  0.0,  0.0, 38.0, 22.0), // main body
+        (-30.0, -6.0, 26.0, 17.0), // left lobe
+        ( 30.0, -4.0, 28.0, 18.0), // right lobe
+        (-14.0, 10.0, 22.0, 13.0), // left top bump
+        ( 14.0, 12.0, 24.0, 14.0), // right top bump
+    ];
+
+    for &(cx, cy, scale) in cloud_defs {
+        commands
+            .spawn((
+                Transform::from_xyz(cx, cy, -9.5),
+                Visibility::default(),
+                GameEntity,
+            ))
+            .with_children(|p| {
+                for &(dx, dy, rx, ry) in puffs {
+                    p.spawn((
+                        Mesh2d(meshes.add(Ellipse::new(rx * scale, ry * scale))),
+                        MeshMaterial2d(cloud_color.clone()),
+                        Transform::from_xyz(dx * scale, dy * scale, 0.0),
+                    ));
+                }
+            });
+    }
 }
 
 // ── Gameplay ──────────────────────────────────────────────────────────────────
@@ -552,6 +653,9 @@ fn move_turtle(
         .translation
         .x
         .clamp(-half + TURTLE_RADIUS, half - TURTLE_RADIUS);
+
+    // Snap turtle's y to the road surface so it follows the curve.
+    transform.translation.y = road_y_at(transform.translation.x);
 }
 
 fn check_collision(
