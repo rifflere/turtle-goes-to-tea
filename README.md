@@ -52,12 +52,28 @@ cargo run
 
 | Action | Keys |
 |---|---|
-| Move turtle | Arrow Left / Right, or A / D |
+| Move turtle | Tap Arrow Left / Right, or A / D |
 | Navigate menus | Arrow Up / Down, or W / S |
 | Select | Enter, Space, or click |
 
 Touch the turtle (circle) to the tea (square) to win.  
 From the win screen you can play again, return to the main menu, or exit.
+
+### Movement — it's all about rhythm
+
+The turtle moves on **taps**, not holds. Each tap nudges it forward by a step that
+grows or shrinks depending on how you're playing:
+
+| Tapping style | Effect |
+|---|---|
+| Gentle rhythm (300–700 ms between taps) | Step size **grows** — turtle hops further each tap |
+| Mashing (faster than 200 ms between taps) | Step size **shrinks** — turtle barely moves |
+| Holding a key down | Momentum brakes almost instantly |
+| Long pause (> 1.5 s) | Step size resets to neutral |
+
+The sweet spot is roughly **one tap every half-second** — like tapping along to a slow,
+calm piece of music. Rush it and you'll barely move. Find the rhythm and the tea
+is yours in seconds.
 
 ## Project Structure
 

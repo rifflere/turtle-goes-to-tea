@@ -4,7 +4,28 @@ use bevy::{prelude::*, sprite::ColorMaterial};
 const WINDOW_WIDTH: f32 = 800.0;
 const TURTLE_RADIUS: f32 = 25.0;
 const TEA_SIZE: f32 = 40.0;
-const TURTLE_SPEED: f32 = 350.0;
+// Rhythm movement — all distances in pixels, all times in seconds.
+//
+// BASE_STEP is sized so the first-frame burst ≈ half the turtle's diameter.
+// burst = step_size * (1 - FRICTION_FREE) ≈ step_size * 0.4 → 60 * 0.4 = 24 px ≈ turtle radius.
+const BASE_STEP: f32 = 60.0;  // pixels per tap at neutral rhythm
+const MIN_STEP: f32 = 5.0;    // fully-degraded step (mashing causes this)
+const MAX_STEP: f32 = 100.0;  // peak step for sustained good rhythm
+const STEP_REWARD: f32 = 10.0;  // bonus per sweet-zone tap  (~+17 % of base)
+const STEP_PENALTY: f32 = 10.0; // penalty per too-fast tap  (~-17 % of base)
+const TOO_FAST_SECS: f64 = 0.20;     // < 200 ms between taps = mashing
+const SWEET_LO_SECS: f64 = 0.30;     // sweet zone: 300 – 700 ms
+const SWEET_HI_SECS: f64 = 0.70;
+const RHYTHM_RESET_SECS: f64 = 1.50; // pause longer than this → step resets to base
+// Friction coefficients (per frame at 60 fps).
+// FRICTION_FREE = 0.60 → glide decays in ~4 frames, making each tap feel like a crisp hop.
+// FRICTION_HELD = 0.20 → near-instant brake when holding.
+const FRICTION_HELD: f32 = 0.20;
+const FRICTION_FREE: f32 = 0.60;
+// Velocity multiplier: converts step_size (px) to initial velocity (px/s).
+// Derived so that total glide distance ≈ step_size pixels.
+// total = velocity / (60 * (1 - FRICTION_FREE)) → velocity = step_size * 60 * (1 - FRICTION_FREE)
+const VELOCITY_SCALE: f32 = 60.0 * (1.0 - FRICTION_FREE);
 
 // ── App state ─────────────────────────────────────────────────────────────────
 // Bevy's States system lets us switch between distinct modes of the app.
@@ -55,6 +76,24 @@ struct MenuNav {
     max: usize,   // total number of buttons on this screen
 }
 
+// Drives the rhythm-based movement system.
+#[derive(Resource)]
+struct TurtleMovement {
+    velocity: f32,      // current velocity in pixels per second
+    step_size: f32,     // pixels this tap will contribute (adjusts with rhythm)
+    last_tap_time: f64, // elapsed_secs at the time of the previous tap
+}
+
+impl Default for TurtleMovement {
+    fn default() -> Self {
+        Self {
+            velocity: 0.0,
+            step_size: BASE_STEP,
+            last_tap_time: 0.0,
+        }
+    }
+}
+
 // Plain function run conditions are more portable than combinator chains.
 fn on_menu_or_win(state: Res<State<AppState>>) -> bool {
     matches!(state.get(), AppState::Menu | AppState::Win)
@@ -73,6 +112,7 @@ fn main() {
         }))
         .insert_resource(ClearColor(Color::srgb(0.22, 0.60, 0.22)))
         .init_state::<AppState>()
+        .init_resource::<TurtleMovement>()
         // Camera lives for the whole session — not tied to any state.
         .add_systems(Startup, spawn_camera)
         // OnEnter / OnExit run once when transitioning into or out of a state.
@@ -334,7 +374,10 @@ fn spawn_game(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut movement: ResMut<TurtleMovement>,
 ) {
+    // Fresh state every time Play / Play Again is chosen.
+    *movement = TurtleMovement::default();
     // GameEntity is added to every gameplay object so cleanup<GameEntity> removes them all.
     commands.spawn((
         Mesh2d(meshes.add(Circle::new(TURTLE_RADIUS))),
@@ -354,23 +397,61 @@ fn spawn_game(
 }
 
 fn move_turtle(
-    keyboard_input: Res<ButtonInput<KeyCode>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mut query: Query<&mut Transform, With<Turtle>>,
     time: Res<Time>,
+    mut movement: ResMut<TurtleMovement>,
 ) {
-    let Ok(mut transform) = query.get_single_mut() else {
-        return;
-    };
+    // Distinguish a fresh press from a held key.
+    let tapped_left  = keyboard.just_pressed(KeyCode::ArrowLeft)  || keyboard.just_pressed(KeyCode::KeyA);
+    let tapped_right = keyboard.just_pressed(KeyCode::ArrowRight) || keyboard.just_pressed(KeyCode::KeyD);
+    let held_left    = keyboard.pressed(KeyCode::ArrowLeft)  || keyboard.pressed(KeyCode::KeyA);
+    let held_right   = keyboard.pressed(KeyCode::ArrowRight) || keyboard.pressed(KeyCode::KeyD);
 
-    let mut direction = 0.0_f32;
-    if keyboard_input.pressed(KeyCode::ArrowLeft) || keyboard_input.pressed(KeyCode::KeyA) {
-        direction -= 1.0;
-    }
-    if keyboard_input.pressed(KeyCode::ArrowRight) || keyboard_input.pressed(KeyCode::KeyD) {
-        direction += 1.0;
+    let tapped = tapped_left || tapped_right;
+    // "held" is true when a key is down but wasn't *just* pressed this frame.
+    let held   = (held_left || held_right) && !tapped;
+
+    if tapped {
+        let direction: f32 = match (tapped_left, tapped_right) {
+            (true, false) => -1.0,
+            (false, true) =>  1.0,
+            _ => 0.0, // both simultaneously → no movement
+        };
+
+        if direction != 0.0 {
+            let now      = time.elapsed_secs() as f64;
+            let interval = now - movement.last_tap_time;
+            movement.last_tap_time = now;
+
+            // Adjust step_size based on how rhythmic the tapping is.
+            movement.step_size = if interval < TOO_FAST_SECS {
+                // Mashing — penalise. Can bottom out at MIN_STEP.
+                (movement.step_size - STEP_PENALTY).max(MIN_STEP)
+            } else if (SWEET_LO_SECS..=SWEET_HI_SECS).contains(&interval) {
+                // Sweet spot — reward. Capped at MAX_STEP.
+                (movement.step_size + STEP_REWARD).min(MAX_STEP)
+            } else if interval > RHYTHM_RESET_SECS {
+                // Long pause → back to neutral, no bonus or penalty.
+                BASE_STEP
+            } else {
+                // Between too-fast and sweet zone: neutral, no change.
+                movement.step_size
+            };
+
+            // Set velocity so the natural glide covers roughly step_size pixels.
+            // Derivation: total_distance = velocity / (60 * (1 - FRICTION_FREE)) = velocity / VELOCITY_SCALE
+            // → velocity = step_size * VELOCITY_SCALE
+            movement.velocity = direction * movement.step_size * VELOCITY_SCALE;
+        }
     }
 
-    transform.translation.x += direction * TURTLE_SPEED * time.delta_secs();
+    // Friction: normalised to 60 fps so speed feels the same at any frame rate.
+    let per_frame_decay = if held { FRICTION_HELD } else { FRICTION_FREE };
+    movement.velocity *= per_frame_decay.powf(time.delta_secs() * 60.0);
+
+    let Ok(mut transform) = query.get_single_mut() else { return; };
+    transform.translation.x += movement.velocity * time.delta_secs();
 
     let half = WINDOW_WIDTH / 2.0;
     transform.translation.x = transform
