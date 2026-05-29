@@ -35,14 +35,21 @@ enum AppState {
 #[derive(Component)] struct MenuRoot;
 #[derive(Component)] struct WinRoot;
 #[derive(Component)] struct TitleText;
-
-// Tags the win-screen turtle so we can animate it each frame.
 #[derive(Component)] struct WinTurtle;
+#[derive(Component)] struct MenuTurtle;
 
-// Tags individual steam puff entities so we can animate them.
+// Thought-bubble circles on the menu screen
+#[derive(Component)]
+struct ThoughtBubble {
+    index: usize, // 0 = small dot, 1 = medium dot, 2 = large bubble
+}
+
+// Tiny floating teacup icon in the thought bubble
+#[derive(Component)] struct ThoughtTeacup;
+
 #[derive(Component)]
 struct SteamPuff {
-    offset: f32, // phase offset so puffs don't all move in sync
+    offset: f32,
 }
 
 #[derive(Component)]
@@ -114,12 +121,17 @@ fn main() {
         .add_systems(OnExit(AppState::Win), cleanup::<WinRoot>)
         .add_systems(
             Update,
-            animate_title.run_if(in_state(AppState::Menu)),
+            (animate_title, animate_menu_turtle, animate_thought_bubble)
+                .run_if(in_state(AppState::Menu)),
         )
         .add_systems(
             Update,
             (menu_navigation, update_button_visuals, wobble_buttons)
                 .run_if(on_menu_or_win),
+        )
+        .add_systems(
+            Update,
+            menu_esc_quit.run_if(in_state(AppState::Menu)),
         )
         .add_systems(
             Update,
@@ -147,11 +159,17 @@ fn cleanup<T: Component>(mut commands: Commands, query: Query<Entity, With<T>>) 
 }
 
 // ── Menu screen ───────────────────────────────────────────────────────────────
-fn spawn_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn spawn_menu(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
     commands.insert_resource(MenuNav { index: 0, max: 2 });
 
     let font = asset_server.load("fonts/whimsical.ttf");
 
+    // ── UI layer ─────────────────────────────────────────────────────────────
     commands
         .spawn((
             Node {
@@ -159,11 +177,12 @@ fn spawn_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
                 height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
+                justify_content: JustifyContent::FlexEnd,
                 row_gap: Val::Px(22.0),
+                padding: UiRect::bottom(Val::Px(52.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.14, 0.43, 0.14)),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
             MenuRoot,
         ))
         .with_children(|root| {
@@ -176,7 +195,7 @@ fn spawn_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
                 },
                 TextColor(Color::srgb(0.96, 0.82, 0.22)),
                 Node {
-                    margin: UiRect::bottom(Val::Px(48.0)),
+                    margin: UiRect::bottom(Val::Px(28.0)),
                     ..default()
                 },
                 TitleText,
@@ -185,6 +204,212 @@ fn spawn_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
             spawn_button(root, "Play", 0, ButtonAction::Play, font.clone());
             spawn_button(root, "Exit", 1, ButtonAction::Exit, font.clone());
         });
+
+    // ── 2D background ─────────────────────────────────────────────────────────
+    // Sky
+    commands.spawn((
+        Mesh2d(meshes.add(Rectangle::new(WINDOW_WIDTH, WINDOW_HEIGHT / 2.0))),
+        MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.53, 0.81, 0.92)))),
+        Transform::from_xyz(0.0, WINDOW_HEIGHT / 4.0, -10.0),
+        MenuRoot,
+    ));
+    // Ground
+    commands.spawn((
+        Mesh2d(meshes.add(Rectangle::new(WINDOW_WIDTH, WINDOW_HEIGHT / 2.0))),
+        MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.28, 0.62, 0.18)))),
+        Transform::from_xyz(0.0, -WINDOW_HEIGHT / 4.0, -10.0),
+        MenuRoot,
+    ));
+
+    // ── Menu turtle — sitting, gazing upward, dreaming of tea ────────────────
+    // Placed left of centre, facing right. The head tilts up (thinking pose).
+    let s = 1.5_f32; // scale
+
+    let t_body  = materials.add(ColorMaterial::from(Color::srgb(0.20, 0.54, 0.12)));
+    let t_shell = materials.add(ColorMaterial::from(Color::srgb(0.11, 0.34, 0.05)));
+    let t_head  = materials.add(ColorMaterial::from(Color::srgb(0.26, 0.64, 0.16)));
+    let t_eye   = materials.add(ColorMaterial::from(Color::srgb(0.06, 0.06, 0.06)));
+
+    // Thought-bubble materials
+    let bubble_col  = materials.add(ColorMaterial::from(Color::srgba(0.97, 0.97, 0.99, 0.92)));
+    let outline_col = materials.add(ColorMaterial::from(Color::srgba(0.80, 0.80, 0.85, 0.6)));
+
+    // Teacup materials (tiny, inside the bubble)
+    let c_porcelain = materials.add(ColorMaterial::from(Color::srgb(0.95, 0.92, 0.87)));
+    let c_shadow    = materials.add(ColorMaterial::from(Color::srgb(0.76, 0.73, 0.68)));
+    let c_tea_col   = materials.add(ColorMaterial::from(Color::srgb(0.52, 0.28, 0.07)));
+    let steam_col   = materials.add(ColorMaterial::from(Color::srgba(0.90, 0.90, 0.90, 0.6)));
+
+    commands
+        .spawn((
+            Transform::from_xyz(-160.0, 20.0, 0.0),
+            Visibility::default(),
+            MenuTurtle,
+            MenuRoot,
+        ))
+        .with_children(|p| {
+            // Legs (sitting — splayed outward)
+            for (x, y, angle) in [
+                (-16.0_f32 * s, -24.0 * s,  0.5_f32),
+                ( -6.0 * s,     -24.0 * s,  0.2),
+                (  8.0 * s,     -24.0 * s, -0.2),
+                ( 18.0 * s,     -24.0 * s, -0.5),
+            ] {
+                p.spawn((
+                    Mesh2d(meshes.add(Ellipse::new(5.0 * s, 11.0 * s))),
+                    MeshMaterial2d(t_body.clone()),
+                    Transform::from_xyz(x, y, -0.1)
+                        .with_rotation(Quat::from_rotation_z(angle)),
+                ));
+            }
+            // Tail
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(6.0 * s, 4.0 * s))),
+                MeshMaterial2d(t_body.clone()),
+                Transform::from_xyz(-30.0 * s, -4.0 * s, -0.1),
+            ));
+            // Body
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(28.0 * s, 18.0 * s))),
+                MeshMaterial2d(t_body.clone()),
+                Transform::from_xyz(0.0, 0.0, 0.0),
+            ));
+            // Shell
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(22.0 * s, 15.0 * s))),
+                MeshMaterial2d(t_shell.clone()),
+                Transform::from_xyz(-2.0 * s, 6.0 * s, 0.1),
+            ));
+            // Neck — angled upward (looking up)
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(7.0 * s, 6.0 * s))),
+                MeshMaterial2d(t_body.clone()),
+                Transform::from_xyz(22.0 * s, 14.0 * s, 0.05),
+            ));
+            // Head — raised and tilted back slightly
+            p.spawn((
+                Mesh2d(meshes.add(Circle::new(13.0 * s))),
+                MeshMaterial2d(t_head.clone()),
+                Transform::from_xyz(28.0 * s, 26.0 * s, 0.0),
+            ));
+            // Eye — looking upward (shifted to top of head)
+            p.spawn((
+                Mesh2d(meshes.add(Circle::new(3.0 * s))),
+                MeshMaterial2d(t_eye.clone()),
+                Transform::from_xyz(32.0 * s, 32.0 * s, 0.2),
+            ));
+
+            // ── Thought bubble trail (three escalating circles) ───────────
+            // Small dot
+            p.spawn((
+                Mesh2d(meshes.add(Circle::new(5.0))),
+                MeshMaterial2d(bubble_col.clone()),
+                Transform::from_xyz(46.0 * s, 32.0 * s, 0.3),
+                ThoughtBubble { index: 0 },
+            ));
+            // Medium dot
+            p.spawn((
+                Mesh2d(meshes.add(Circle::new(9.0))),
+                MeshMaterial2d(bubble_col.clone()),
+                Transform::from_xyz(58.0 * s, 42.0 * s, 0.3),
+                ThoughtBubble { index: 1 },
+            ));
+            // Large bubble
+            p.spawn((
+                Mesh2d(meshes.add(Circle::new(38.0))),
+                MeshMaterial2d(bubble_col.clone()),
+                Transform::from_xyz(80.0 * s, 68.0 * s, 0.3),
+                ThoughtBubble { index: 2 },
+            ));
+            // Subtle outline ring for the large bubble
+            p.spawn((
+                Mesh2d(meshes.add(Circle::new(40.0))),
+                MeshMaterial2d(outline_col.clone()),
+                Transform::from_xyz(80.0 * s, 68.0 * s, 0.29),
+            ));
+
+            // ── Mini teacup inside the large bubble ───────────────────────
+            let bx = 80.0 * s; // bubble centre x (relative to turtle parent)
+            let by = 68.0 * s; // bubble centre y
+
+            // Cup body
+            p.spawn((
+                Mesh2d(meshes.add(Rectangle::new(22.0, 16.0))),
+                MeshMaterial2d(c_porcelain.clone()),
+                Transform::from_xyz(bx, by - 2.0, 0.5),
+                ThoughtTeacup,
+            ));
+            // Rim
+            p.spawn((
+                Mesh2d(meshes.add(Rectangle::new(26.0, 4.0))),
+                MeshMaterial2d(c_shadow.clone()),
+                Transform::from_xyz(bx, by + 6.0, 0.6),
+                ThoughtTeacup,
+            ));
+            // Tea surface
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(9.0, 3.0))),
+                MeshMaterial2d(c_tea_col.clone()),
+                Transform::from_xyz(bx, by + 5.0, 0.7),
+                ThoughtTeacup,
+            ));
+            // Handle
+            p.spawn((
+                Mesh2d(meshes.add(Rectangle::new(4.0, 10.0))),
+                MeshMaterial2d(c_porcelain.clone()),
+                Transform::from_xyz(bx + 13.0, by - 2.0, 0.5),
+                ThoughtTeacup,
+            ));
+            // Saucer
+            p.spawn((
+                Mesh2d(meshes.add(Ellipse::new(14.0, 3.5))),
+                MeshMaterial2d(c_shadow.clone()),
+                Transform::from_xyz(bx, by - 10.0, 0.5),
+                ThoughtTeacup,
+            ));
+            // Mini steam puffs
+            for (i, dx) in [-5.0_f32, 0.0, 5.0].iter().enumerate() {
+                p.spawn((
+                    Mesh2d(meshes.add(Circle::new(3.5))),
+                    MeshMaterial2d(steam_col.clone()),
+                    Transform::from_xyz(bx + dx, by + 12.0, 0.7),
+                    SteamPuff { offset: i as f32 * 0.6 },
+                ));
+            }
+        });
+}
+
+// ── Menu animations ───────────────────────────────────────────────────────────
+
+// Gently rocks the turtle's head — a slow "hmm, thinking" sway.
+fn animate_menu_turtle(
+    time: Res<Time>,
+    mut query: Query<&mut Transform, With<MenuTurtle>>,
+) {
+    let t = time.elapsed_secs();
+    for mut transform in &mut query {
+        // Slow, dreamy bob
+        let bob  = (t * 1.1).sin() * 4.0;
+        // Subtle tilt: leans head toward the thought bubble
+        let rock = (t * 1.1).sin() * 0.03;
+        transform.translation.y = 20.0 + bob;
+        transform.rotation = Quat::from_rotation_z(rock);
+    }
+}
+
+// Pulses the thought-bubble circles with a gentle in-and-out scale.
+// The dots pulse in sequence, giving a "…" animation feel.
+fn animate_thought_bubble(
+    time: Res<Time>,
+    mut query: Query<(&mut Transform, &ThoughtBubble)>,
+) {
+    let t = time.elapsed_secs();
+    for (mut transform, bubble) in &mut query {
+        // Each dot/bubble pulses slightly out of phase
+        let phase  = bubble.index as f32 * 0.4;
+        let pulse  = 1.0 + (t * 2.0 + phase).sin() * 0.06;
+        transform.scale = Vec3::splat(pulse);
+    }
 }
 
 // ── Win screen ────────────────────────────────────────────────────────────────
@@ -198,7 +423,6 @@ fn spawn_win_screen(
 
     let font = asset_server.load("fonts/whimsical.ttf");
 
-    // ── UI layer (title + buttons) ────────────────────────────────────────────
     commands
         .spawn((
             Node {
@@ -234,7 +458,6 @@ fn spawn_win_screen(
             spawn_button(root, "Exit", 2, ButtonAction::Exit, font.clone());
         });
 
-    // ── 2D scene background ───────────────────────────────────────────────────
     // Sky
     commands.spawn((
         Mesh2d(meshes.add(Rectangle::new(WINDOW_WIDTH, WINDOW_HEIGHT / 2.0))),
@@ -250,9 +473,7 @@ fn spawn_win_screen(
         WinRoot,
     ));
 
-    // ── Animated turtle holding a teacup ─────────────────────────────────────
-    // Sits in the upper-centre of the screen. The bob animation moves the
-    // whole parent entity up and down; the cup-arm children move independently.
+    let s = 1.6_f32;
 
     let t_body  = materials.add(ColorMaterial::from(Color::srgb(0.20, 0.54, 0.12)));
     let t_shell = materials.add(ColorMaterial::from(Color::srgb(0.11, 0.34, 0.05)));
@@ -260,16 +481,10 @@ fn spawn_win_screen(
     let t_eye   = materials.add(ColorMaterial::from(Color::srgb(0.06, 0.06, 0.06)));
     let t_smile = materials.add(ColorMaterial::from(Color::srgb(0.06, 0.06, 0.06)));
 
-    // Teacup colours
     let c_porcelain = materials.add(ColorMaterial::from(Color::srgb(0.95, 0.92, 0.87)));
     let c_shadow    = materials.add(ColorMaterial::from(Color::srgb(0.76, 0.73, 0.68)));
     let c_tea_col   = materials.add(ColorMaterial::from(Color::srgb(0.52, 0.28, 0.07)));
-
-    // Steam
-    let steam_col = materials.add(ColorMaterial::from(Color::srgba(0.95, 0.95, 0.95, 0.7)));
-
-    // Scale up compared to the gameplay turtle (1.6×)
-    let s = 1.6_f32;
+    let steam_col   = materials.add(ColorMaterial::from(Color::srgba(0.95, 0.95, 0.95, 0.7)));
 
     commands
         .spawn((
@@ -279,8 +494,6 @@ fn spawn_win_screen(
             WinRoot,
         ))
         .with_children(|p| {
-            // ── Body parts (facing right, upright) ───────────────────────────
-            // Back legs
             for (x, y, angle) in [
                 (-18.0_f32 * s, -28.0 * s, 0.35_f32),
                 ( -6.0 * s,     -28.0 * s, 0.15),
@@ -292,106 +505,84 @@ fn spawn_win_screen(
                         .with_rotation(Quat::from_rotation_z(angle)),
                 ));
             }
-            // Tail
             p.spawn((
                 Mesh2d(meshes.add(Ellipse::new(6.0 * s, 4.0 * s))),
                 MeshMaterial2d(t_body.clone()),
                 Transform::from_xyz(-34.0 * s, -4.0 * s, -0.1),
             ));
-            // Body
             p.spawn((
                 Mesh2d(meshes.add(Ellipse::new(28.0 * s, 18.0 * s))),
                 MeshMaterial2d(t_body.clone()),
                 Transform::from_xyz(0.0, 0.0, 0.0),
             ));
-            // Shell
             p.spawn((
                 Mesh2d(meshes.add(Ellipse::new(22.0 * s, 15.0 * s))),
                 MeshMaterial2d(t_shell.clone()),
                 Transform::from_xyz(-2.0 * s, 6.0 * s, 0.1),
             ));
-            // Front leg raised to hold cup — angled upward
             p.spawn((
                 Mesh2d(meshes.add(Ellipse::new(5.0 * s, 11.0 * s))),
                 MeshMaterial2d(t_body.clone()),
                 Transform::from_xyz(20.0 * s, 4.0 * s, 0.2)
                     .with_rotation(Quat::from_rotation_z(-1.1)),
             ));
-            // Second front leg (lower, for stability)
             p.spawn((
                 Mesh2d(meshes.add(Ellipse::new(5.0 * s, 11.0 * s))),
                 MeshMaterial2d(t_body.clone()),
                 Transform::from_xyz(14.0 * s, -26.0 * s, -0.1)
                     .with_rotation(Quat::from_rotation_z(-0.2)),
             ));
-            // Neck
             p.spawn((
                 Mesh2d(meshes.add(Ellipse::new(8.0 * s, 7.0 * s))),
                 MeshMaterial2d(t_body.clone()),
                 Transform::from_xyz(24.0 * s, 10.0 * s, 0.05),
             ));
-            // Head — tilted up slightly (happy sip pose)
             p.spawn((
                 Mesh2d(meshes.add(Circle::new(13.0 * s))),
                 MeshMaterial2d(t_head.clone()),
                 Transform::from_xyz(32.0 * s, 18.0 * s, 0.0),
             ));
-            // Eye — closed/squinting for happiness (thin ellipse)
             p.spawn((
                 Mesh2d(meshes.add(Ellipse::new(4.0 * s, 1.5 * s))),
                 MeshMaterial2d(t_eye.clone()),
                 Transform::from_xyz(38.0 * s, 22.0 * s, 0.2),
             ));
-            // Smile — small arc approximated as a rotated thin ellipse
             p.spawn((
                 Mesh2d(meshes.add(Ellipse::new(5.0 * s, 1.8 * s))),
                 MeshMaterial2d(t_smile.clone()),
                 Transform::from_xyz(36.0 * s, 13.0 * s, 0.2)
                     .with_rotation(Quat::from_rotation_z(0.3)),
             ));
-
-            // ── Teacup held in raised leg ─────────────────────────────────
-            // Cup body
             p.spawn((
                 Mesh2d(meshes.add(Rectangle::new(22.0 * s, 28.0 * s))),
                 MeshMaterial2d(c_porcelain.clone()),
                 Transform::from_xyz(36.0 * s, 20.0 * s, 0.3),
             ));
-            // Cup rim
             p.spawn((
                 Mesh2d(meshes.add(Rectangle::new(26.0 * s, 5.0 * s))),
                 MeshMaterial2d(c_shadow.clone()),
                 Transform::from_xyz(36.0 * s, 33.0 * s, 0.4),
             ));
-            // Tea surface
             p.spawn((
                 Mesh2d(meshes.add(Ellipse::new(9.0 * s, 3.5 * s))),
                 MeshMaterial2d(c_tea_col.clone()),
                 Transform::from_xyz(36.0 * s, 31.0 * s, 0.5),
             ));
-            // Cup handle (small rectangle to the right)
             p.spawn((
                 Mesh2d(meshes.add(Rectangle::new(4.0 * s, 14.0 * s))),
                 MeshMaterial2d(c_porcelain.clone()),
                 Transform::from_xyz(48.0 * s, 20.0 * s, 0.25),
             ));
-            // Saucer
             p.spawn((
                 Mesh2d(meshes.add(Ellipse::new(18.0 * s, 4.0 * s))),
                 MeshMaterial2d(c_shadow.clone()),
                 Transform::from_xyz(36.0 * s, 6.0 * s, 0.3),
             ));
-
-            // ── Steam puffs above the cup ─────────────────────────────────
             for (i, dx) in [-6.0_f32, 0.0, 6.0].iter().enumerate() {
                 p.spawn((
                     Mesh2d(meshes.add(Circle::new(4.5 * s))),
                     MeshMaterial2d(steam_col.clone()),
-                    Transform::from_xyz(
-                        (36.0 + dx) * s,
-                        44.0 * s,
-                        0.6,
-                    ),
+                    Transform::from_xyz((36.0 + dx) * s, 44.0 * s, 0.6),
                     SteamPuff { offset: i as f32 * 0.7 },
                 ));
             }
@@ -399,8 +590,6 @@ fn spawn_win_screen(
 }
 
 // ── Win screen animations ─────────────────────────────────────────────────────
-
-// Bobs the whole turtle gently up and down and rocks it side to side.
 fn animate_win_turtle(
     time: Res<Time>,
     mut query: Query<&mut Transform, With<WinTurtle>>,
@@ -414,19 +603,15 @@ fn animate_win_turtle(
     }
 }
 
-// Floats steam puffs upward in a loop, fading as they rise.
 fn animate_steam(
     time: Res<Time>,
     mut query: Query<(&mut Transform, &SteamPuff)>,
 ) {
     let t = time.elapsed_secs();
     for (mut transform, puff) in &mut query {
-        // Each puff oscillates on its own phase so they stagger nicely.
         let phase = (t * 1.4 + puff.offset) % 1.0;
-        let rise  = phase * 28.0; // drifts up 28 px over its cycle
+        let rise  = phase * 28.0;
         let sway  = ((t * 2.0 + puff.offset) * 1.5).sin() * 5.0;
-        // Base position is set relative to the turtle parent, so we only
-        // touch y and x here — the parent transform handles world placement.
         let base_x = match puff.offset as u32 {
             0 => -6.0,
             1 =>  0.0,
@@ -435,7 +620,6 @@ fn animate_steam(
         let base_y = 44.0 * 1.6;
         transform.translation.x = base_x + sway;
         transform.translation.y = base_y + rise;
-        // Scale down as they rise (fade via shrink since we can't easily alpha-animate)
         let shrink = 1.0 - phase * 0.7;
         transform.scale = Vec3::splat(shrink);
     }
@@ -515,6 +699,17 @@ fn wobble_buttons(
 }
 
 // ── Menu / win navigation ─────────────────────────────────────────────────────
+
+// Closes the game when Escape is pressed on the main menu.
+fn menu_esc_quit(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut app_exit: EventWriter<AppExit>,
+) {
+    if keyboard.just_pressed(KeyCode::Escape) {
+        app_exit.send(AppExit::Success);
+    }
+}
+
 fn menu_navigation(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut nav: ResMut<MenuNav>,
@@ -575,15 +770,12 @@ fn spawn_backdrop(
     let half_w = WINDOW_WIDTH;
     let half_h = WINDOW_HEIGHT / 2.0;
 
-    // ── Sky ──────────────────────────────────────────────────────────────────
     commands.spawn((
         Mesh2d(meshes.add(Rectangle::new(half_w, half_h))),
         MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.53, 0.81, 0.92)))),
         Transform::from_xyz(0.0, half_h / 2.0, -10.0),
         GameEntity,
     ));
-
-    // ── Ground ───────────────────────────────────────────────────────────────
     commands.spawn((
         Mesh2d(meshes.add(Rectangle::new(half_w, half_h))),
         MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.28, 0.62, 0.18)))),
@@ -591,19 +783,15 @@ fn spawn_backdrop(
         GameEntity,
     ));
 
-    // ── Dirt road ────────────────────────────────────────────────────────────
     let road_color      = materials.add(ColorMaterial::from(Color::srgb(0.52, 0.36, 0.18)));
     let road_edge_color = materials.add(ColorMaterial::from(Color::srgb(0.42, 0.28, 0.12)));
-
     let road_width: f32  = 90.0;
     let edge_width: f32  = 6.0;
     let seg_len: f32     = 14.0;
     let seg_overlap: f32 = 2.0;
-
     let road_start_x = -(WINDOW_WIDTH / 2.0) - seg_len;
     let road_end_x   =   WINDOW_WIDTH / 2.0  + seg_len;
     let mut rx = road_start_x;
-
     while rx < road_end_x {
         let mid_x = rx + seg_len * 0.5;
         let dy    = road_y_at(rx + 1.0) - road_y_at(rx);
@@ -611,14 +799,12 @@ fn spawn_backdrop(
         let cy    = road_y_at(mid_x);
         let t     = Transform::from_xyz(mid_x, cy, -8.0)
             .with_rotation(Quat::from_rotation_z(angle));
-
         commands.spawn((
             Mesh2d(meshes.add(Rectangle::new(seg_len + seg_overlap, road_width))),
             MeshMaterial2d(road_color.clone()),
             t,
             GameEntity,
         ));
-
         let offset = (road_width - edge_width) / 2.0;
         let mut edge_top = t;
         edge_top.translation.y += angle.cos() * offset;
@@ -626,7 +812,6 @@ fn spawn_backdrop(
         let mut edge_bot = t;
         edge_bot.translation.y -= angle.cos() * offset;
         edge_bot.translation.x += angle.sin() * offset;
-
         for edge_t in [edge_top, edge_bot] {
             commands.spawn((
                 Mesh2d(meshes.add(Rectangle::new(seg_len + seg_overlap, edge_width))),
@@ -635,19 +820,15 @@ fn spawn_backdrop(
                 GameEntity,
             ));
         }
-
         rx += seg_len;
     }
 
-    // ── Clouds ───────────────────────────────────────────────────────────────
     let cloud_color = materials.add(ColorMaterial::from(Color::srgb(0.97, 0.97, 0.98)));
-
     let cloud_defs: &[(f32, f32, f32)] = &[
         (-280.0, 180.0, 1.0),
         (  60.0, 210.0, 0.75),
         ( 260.0, 155.0, 1.2),
     ];
-
     let puffs: &[(f32, f32, f32, f32)] = &[
         (  0.0,  0.0, 38.0, 22.0),
         (-30.0, -6.0, 26.0, 17.0),
@@ -655,7 +836,6 @@ fn spawn_backdrop(
         (-14.0, 10.0, 22.0, 13.0),
         ( 14.0, 12.0, 24.0, 14.0),
     ];
-
     for &(cx, cy, scale) in cloud_defs {
         commands
             .spawn((
@@ -674,23 +854,18 @@ fn spawn_backdrop(
             });
     }
 
-    // ── Grass blades ─────────────────────────────────────────────────────────
     let blade_light = materials.add(ColorMaterial::from(Color::srgb(0.38, 0.78, 0.28)));
     let blade_dark  = materials.add(ColorMaterial::from(Color::srgb(0.28, 0.64, 0.18)));
-
     let blade_w: f32 = 5.0;
     let blade_h: f32 = 16.0;
-
     let blade_mesh = meshes.add(Triangle2d::new(
         Vec2::new(-blade_w, 0.0),
         Vec2::new( blade_w, 0.0),
         Vec2::new(    0.0,  blade_h),
     ));
-
     let step = 8.0_f32;
     let count = (WINDOW_WIDTH / step).ceil() as i32 + 2;
     let start_x = -(WINDOW_WIDTH / 2.0);
-
     for i in 0..count {
         let x = start_x + i as f32 * step;
         let height_offset = if i % 3 == 0 { 3.0 } else if i % 3 == 1 { -3.0 } else { 0.0 };
@@ -719,7 +894,6 @@ fn spawn_game(
 
     spawn_backdrop(&mut commands, &mut meshes, &mut materials);
 
-    // ── Turtle ───────────────────────────────────────────────────────────────
     let t_body   = materials.add(ColorMaterial::from(Color::srgb(0.20, 0.54, 0.12)));
     let t_shell  = materials.add(ColorMaterial::from(Color::srgb(0.11, 0.34, 0.05)));
     let t_head   = materials.add(ColorMaterial::from(Color::srgb(0.26, 0.64, 0.16)));
@@ -782,7 +956,6 @@ fn spawn_game(
             ));
         });
 
-    // ── Teacup ───────────────────────────────────────────────────────────────
     let c_porcelain = materials.add(ColorMaterial::from(Color::srgb(0.95, 0.92, 0.87)));
     let c_shadow    = materials.add(ColorMaterial::from(Color::srgb(0.76, 0.73, 0.68)));
     let c_tea       = materials.add(ColorMaterial::from(Color::srgb(0.52, 0.28, 0.07)));
