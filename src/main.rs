@@ -1,31 +1,22 @@
 use bevy::{prelude::*, sprite::ColorMaterial};
+use std::time::Duration;
 
 // ── Gameplay constants ────────────────────────────────────────────────────────
 const WINDOW_WIDTH: f32 = 800.0;
 const WINDOW_HEIGHT: f32 = 600.0;
 const TURTLE_RADIUS: f32 = 25.0;
 const TEA_SIZE: f32 = 40.0;
-// Rhythm movement — all distances in pixels, all times in seconds.
-//
-// BASE_STEP is sized so the first-frame burst ≈ half the turtle's diameter.
-// burst = step_size * (1 - FRICTION_FREE) ≈ step_size * 0.4 → 60 * 0.4 = 24 px ≈ turtle radius.
-const BASE_STEP: f32 = 60.0;  // pixels per tap at neutral rhythm
-const MIN_STEP: f32 = 5.0;    // fully-degraded step (mashing causes this)
-const MAX_STEP: f32 = 100.0;  // peak step for sustained good rhythm
-const STEP_REWARD: f32 = 10.0;  // bonus per sweet-zone tap  (~+17 % of base)
-const STEP_PENALTY: f32 = 10.0; // penalty per too-fast tap  (~-17 % of base)
-const TOO_FAST_SECS: f64 = 0.20;     // < 200 ms between taps = mashing
-const SWEET_LO_SECS: f64 = 0.30;     // sweet zone: 300 – 700 ms
+const BASE_STEP: f32 = 60.0;
+const MIN_STEP: f32 = 5.0;
+const MAX_STEP: f32 = 100.0;
+const STEP_REWARD: f32 = 10.0;
+const STEP_PENALTY: f32 = 10.0;
+const TOO_FAST_SECS: f64 = 0.20;
+const SWEET_LO_SECS: f64 = 0.30;
 const SWEET_HI_SECS: f64 = 0.70;
-const RHYTHM_RESET_SECS: f64 = 1.50; // pause longer than this → step resets to base
-// Friction coefficients (per frame at 60 fps).
-// FRICTION_FREE = 0.60 → glide decays in ~4 frames, making each tap feel like a crisp hop.
-// FRICTION_HELD = 0.20 → near-instant brake when holding.
+const RHYTHM_RESET_SECS: f64 = 1.50;
 const FRICTION_HELD: f32 = 0.20;
 const FRICTION_FREE: f32 = 0.60;
-// Velocity multiplier: converts step_size (px) to initial velocity (px/s).
-// Derived so that total glide distance ≈ step_size pixels.
-// total = velocity / (60 * (1 - FRICTION_FREE)) → velocity = step_size * 60 * (1 - FRICTION_FREE)
 const VELOCITY_SCALE: f32 = 60.0 * (1.0 - FRICTION_FREE);
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -40,12 +31,9 @@ enum AppState {
 // ── Components ────────────────────────────────────────────────────────────────
 #[derive(Component)] struct Turtle;
 #[derive(Component)] struct Tea;
-
 #[derive(Component)] struct GameEntity;
-
 #[derive(Component)] struct MenuRoot;
 #[derive(Component)] struct WinRoot;
-
 #[derive(Component)] struct TitleText;
 
 #[derive(Component)]
@@ -85,6 +73,12 @@ impl Default for TurtleMovement {
     }
 }
 
+// Ticks at the sweet-zone midpoint (0.50 s) to guide the player's rhythm.
+#[derive(Resource)]
+struct BeepTimer {
+    timer: Timer,
+}
+
 fn on_menu_or_win(state: Res<State<AppState>>) -> bool {
     matches!(state.get(), AppState::Menu | AppState::Win)
 }
@@ -121,7 +115,7 @@ fn main() {
         )
         .add_systems(
             Update,
-            (move_turtle, check_collision)
+            (move_turtle, check_collision, play_beep)
                 .chain()
                 .run_if(in_state(AppState::Playing)),
         )
@@ -259,7 +253,6 @@ fn spawn_button(
 }
 
 // ── Menu animation systems ────────────────────────────────────────────────────
-
 fn animate_title(time: Res<Time>, mut query: Query<&mut TextColor, With<TitleText>>) {
     for mut color in &mut query {
         let t = (time.elapsed_secs() * 1.4).sin() * 0.5 + 0.5;
@@ -317,8 +310,8 @@ fn menu_navigation(
         }
     }
 
-    let confirm_keyboard = keyboard.just_pressed(KeyCode::Enter)
-        || keyboard.just_pressed(KeyCode::Space);
+    let confirm_keyboard =
+        keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::Space);
     let confirm_mouse = interaction_query
         .iter()
         .any(|(i, item)| *i == Interaction::Pressed && item.index == nav.index);
@@ -344,6 +337,7 @@ fn menu_navigation(
 }
 
 // ── Backdrop ──────────────────────────────────────────────────────────────────
+
 // Evaluates the road's vertical position at a given x.
 // Two low-frequency sine waves give a gentle, natural undulation.
 fn road_y_at(x: f32) -> f32 {
@@ -378,7 +372,7 @@ fn spawn_backdrop(
     // Approximated as a series of overlapping short rectangles, each rotated
     // to follow the local slope of road_y_at(). Sits at z = -8 so it's above
     // the ground quad (-10) and grass (-9) but behind the turtle/tea (0+).
-    let road_color = materials.add(ColorMaterial::from(Color::srgb(0.52, 0.36, 0.18)));
+    let road_color      = materials.add(ColorMaterial::from(Color::srgb(0.52, 0.36, 0.18)));
     let road_edge_color = materials.add(ColorMaterial::from(Color::srgb(0.42, 0.28, 0.12)));
 
     let road_width: f32  = 90.0;
@@ -431,18 +425,18 @@ fn spawn_backdrop(
 
     // ── Clouds ───────────────────────────────────────────────────────────────
     // Each cloud is a cluster of overlapping ellipses spawned as children of
-    // an invisible parent so the whole thing moves as one unit.
-    // z = -9.5 puts clouds behind the grass strip but in front of the sky quad.
+    // an invisible parent. z = -9.5 puts them in front of the sky but behind
+    // the grass strip.
     let cloud_color = materials.add(ColorMaterial::from(Color::srgb(0.97, 0.97, 0.98)));
 
-    // (centre_x, centre_y, scale) — y is in the upper half of the screen
+    // (centre_x, centre_y, scale)
     let cloud_defs: &[(f32, f32, f32)] = &[
         (-280.0, 180.0, 1.0),
         (  60.0, 210.0, 0.75),
         ( 260.0, 155.0, 1.2),
     ];
 
-    // Puff offsets relative to each cloud centre: (dx, dy, rx, ry)
+    // Per-cloud puff offsets: (dx, dy, rx, ry)
     let puffs: &[(f32, f32, f32, f32)] = &[
         (  0.0,  0.0, 38.0, 22.0), // main body
         (-30.0, -6.0, 26.0, 17.0), // left lobe
@@ -468,6 +462,35 @@ fn spawn_backdrop(
                 }
             });
     }
+
+    // ── Grass blades ─────────────────────────────────────────────────────────
+    let blade_light = materials.add(ColorMaterial::from(Color::srgb(0.38, 0.78, 0.28)));
+    let blade_dark  = materials.add(ColorMaterial::from(Color::srgb(0.28, 0.64, 0.18)));
+
+    let blade_w: f32 = 5.0;
+    let blade_h: f32 = 16.0;
+
+    let blade_mesh = meshes.add(Triangle2d::new(
+        Vec2::new(-blade_w, 0.0),
+        Vec2::new( blade_w, 0.0),
+        Vec2::new(    0.0,  blade_h),
+    ));
+
+    let step = 8.0_f32;
+    let count = (WINDOW_WIDTH / step).ceil() as i32 + 2;
+    let start_x = -(WINDOW_WIDTH / 2.0);
+
+    for i in 0..count {
+        let x = start_x + i as f32 * step;
+        let height_offset = if i % 3 == 0 { 3.0 } else if i % 3 == 1 { -3.0 } else { 0.0 };
+        let mat = if i % 2 == 0 { blade_light.clone() } else { blade_dark.clone() };
+        commands.spawn((
+            Mesh2d(blade_mesh.clone()),
+            MeshMaterial2d(mat),
+            Transform::from_xyz(x, height_offset, -9.0),
+            GameEntity,
+        ));
+    }
 }
 
 // ── Gameplay ──────────────────────────────────────────────────────────────────
@@ -478,6 +501,12 @@ fn spawn_game(
     mut movement: ResMut<TurtleMovement>,
 ) {
     *movement = TurtleMovement::default();
+
+    // Start the rhythm beep. The sweet-zone midpoint is (0.30 + 0.70) / 2 = 0.50 s,
+    // so the beep fires at exactly the pace the player should be tapping.
+    commands.insert_resource(BeepTimer {
+        timer: Timer::from_seconds(0.50, TimerMode::Repeating),
+    });
 
     spawn_backdrop(&mut commands, &mut meshes, &mut materials);
 
@@ -497,7 +526,7 @@ fn spawn_game(
 
     commands
         .spawn((
-            Transform::from_xyz(-350.0, 0.0, 0.0),
+            Transform::from_xyz(-350.0, road_y_at(-350.0), 0.0),
             Visibility::default(),
             Turtle,
             GameEntity,
@@ -549,16 +578,16 @@ fn spawn_game(
     let c_shadow    = materials.add(ColorMaterial::from(Color::srgb(0.76, 0.73, 0.68)));
     let c_tea       = materials.add(ColorMaterial::from(Color::srgb(0.52, 0.28, 0.07)));
 
-    let m_saucer     = meshes.add(Ellipse::new(28.0, 6.0));
-    let m_hbar       = meshes.add(Rectangle::new(5.0, 20.0));
-    let m_harm       = meshes.add(Rectangle::new(10.0, 5.0));
-    let m_cup        = meshes.add(Rectangle::new(30.0, 38.0));
-    let m_tea_surf   = meshes.add(Ellipse::new(12.0, 4.5));
-    let m_rim        = meshes.add(Rectangle::new(34.0, 6.0));
+    let m_saucer   = meshes.add(Ellipse::new(28.0, 6.0));
+    let m_hbar     = meshes.add(Rectangle::new(5.0, 20.0));
+    let m_harm     = meshes.add(Rectangle::new(10.0, 5.0));
+    let m_cup      = meshes.add(Rectangle::new(30.0, 38.0));
+    let m_tea_surf = meshes.add(Ellipse::new(12.0, 4.5));
+    let m_rim      = meshes.add(Rectangle::new(34.0, 6.0));
 
     commands
         .spawn((
-            Transform::from_xyz(300.0, 0.0, 0.0),
+            Transform::from_xyz(300.0, road_y_at(300.0), 0.0),
             Visibility::default(),
             Tea,
             GameEntity,
@@ -602,6 +631,29 @@ fn spawn_game(
         });
 }
 
+// ── Beep ──────────────────────────────────────────────────────────────────────
+// Uses Bevy's built-in Pitch asset — a pure sine tone at a given frequency and
+// duration. No sound file needed. The entity despawns itself when playback ends.
+fn play_beep(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut beep_timer: ResMut<BeepTimer>,
+    mut pitch_assets: ResMut<Assets<Pitch>>,
+) {
+    if beep_timer.timer.tick(time.delta()).just_finished() {
+        commands.spawn((
+            AudioPlayer(pitch_assets.add(Pitch::new(399.0, Duration::from_millis(80)))),
+            PlaybackSettings {
+                mode: bevy::audio::PlaybackMode::Despawn,
+                volume: bevy::audio::Volume::new(0.2), // 0.0 = silent, 1.0 = full volume
+                ..default()
+            },
+            GameEntity,
+        ));
+    }
+}
+
+// ── Turtle movement ───────────────────────────────────────────────────────────
 fn move_turtle(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut query: Query<&mut Transform, With<Turtle>>,
