@@ -4,7 +4,7 @@ A tiny Bevy game. Navigate the turtle to the tea. Drink tea. Win.
 
 ![Main menu](images/menu.jpg)
 
-![Gameplay — turtle meets tea](images/turtle-and-tea.jpg)
+![Gameplay — turtle meets tea](images/gameplay.gif)
 
 ## Prerequisites
 
