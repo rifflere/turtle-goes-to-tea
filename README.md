@@ -1,6 +1,6 @@
 # Turtle Goes to Tea
 
-A tiny Bevy game. Green screen. Press any key. You win.
+A tiny Bevy game. Navigate the turtle to the tea. Drink tea. Win.
 
 ## Prerequisites
 
@@ -23,6 +23,20 @@ Rust on Windows needs the MSVC linker. If you don't have Visual Studio installed
 2. In the installer, select **"Desktop development with C++"**.
 3. Restart your terminal after installing.
 
+### 3. Add a whimsical font (optional but recommended)
+
+The game loads a font from `assets/fonts/whimsical.ttf`. Without it, Bevy falls  
+back to its built-in monospace font, which works but isn't very cosy.
+
+**Recommended:** [Amatic SC](https://fonts.google.com/specimen/Amatic+SC) — hand-drawn, gentle, very tea-appropriate.
+
+1. Go to the link above → click **Download family**
+2. Unzip the download
+3. Copy `AmaticSC-Regular.ttf` into `assets/fonts/`
+4. Rename it to `whimsical.ttf`
+
+Any `.ttf` font works — feel free to pick your own from Google Fonts.
+
 ## How to Run
 
 ```
@@ -34,35 +48,42 @@ cargo run
 > Subsequent runs are much faster. The `Cargo.toml` already includes  
 > optimization settings that cut dev compile times significantly.
 
-## What You'll See
+## How to Play
 
-- A pleasant green window opens.
-- "Press any key to continue..." appears centered on screen.
-- Press any key → "You win!"
+| Action | Keys |
+|---|---|
+| Move turtle | Arrow Left / Right, or A / D |
+| Navigate menus | Arrow Up / Down, or W / S |
+| Select | Enter, Space, or click |
+
+Touch the turtle (circle) to the tea (square) to win.  
+From the win screen you can play again, return to the main menu, or exit.
 
 ## Project Structure
 
 ```
 turtle-goes-to-tea/
-├── Cargo.toml       # Project metadata and dependencies
+├── assets/
+│   └── fonts/
+│       └── whimsical.ttf   ← drop your font here
+├── Cargo.toml
 └── src/
-    └── main.rs      # All the game code (heavily commented for learning)
+    └── main.rs
 ```
 
 ## Key Bevy Concepts Used
 
 | Concept | What it does |
 |---|---|
-| `App` | The entry point — you register plugins and systems here |
-| `DefaultPlugins` | Bevy's batteries-included bundle (window, input, rendering, etc.) |
-| `ClearColor` resource | Sets the window background color |
-| `Startup` schedule | Systems here run exactly once at launch |
-| `Update` schedule | Systems here run every frame |
-| `Commands` | Used to spawn/despawn entities and components |
-| `Camera2d` | A 2D camera; Bevy 0.15+ auto-adds required companion components |
-| `Text2d` | Text rendered in 2D world space |
-| `Component` trait | Marks a struct as something that can be attached to entities |
-| `Query` | Lets a system read/write specific components on matching entities |
-| `Res<T>` / `ResMut<T>` | Read/write access to a global resource |
-| `ButtonInput<KeyCode>` | Tracks which keyboard keys are pressed/just-pressed/just-released |
-| `Local<T>` | System-local state that persists between frames |
+| `States` | Distinct app modes (Menu / Playing / Win) with clean enter/exit hooks |
+| `OnEnter` / `OnExit` | Schedules that fire once when transitioning into or out of a state |
+| `run_if(in_state(...))` | Limits an `Update` system to run only in certain states |
+| `despawn_recursive` | Despawns an entity and all its children — used to tear down UI screens |
+| `Node` | The UI layout component (flexbox-based) |
+| `BackgroundColor` | Sets a UI node's fill color |
+| `BorderRadius` | Rounds the corners of a UI node |
+| `Button` + `Interaction` | Bevy's built-in hover/click detection for UI nodes |
+| `Changed<Interaction>` | Query filter — only yields entities whose value changed this frame |
+| `NextState<T>` | Resource used to request a state transition |
+| `EventWriter<AppExit>` | Sends the built-in "please close the app" event |
+| `AssetServer` | Loads files from the `assets/` folder at runtime |
