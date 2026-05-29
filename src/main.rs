@@ -376,24 +376,143 @@ fn spawn_game(
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut movement: ResMut<TurtleMovement>,
 ) {
-    // Fresh state every time Play / Play Again is chosen.
     *movement = TurtleMovement::default();
-    // GameEntity is added to every gameplay object so cleanup<GameEntity> removes them all.
-    commands.spawn((
-        Mesh2d(meshes.add(Circle::new(TURTLE_RADIUS))),
-        MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.1, 0.4, 0.1)))),
-        Transform::from_xyz(-350.0, 0.0, 0.0),
-        Turtle,
-        GameEntity,
-    ));
 
-    commands.spawn((
-        Mesh2d(meshes.add(Rectangle::new(TEA_SIZE, TEA_SIZE))),
-        MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.55, 0.35, 0.1)))),
-        Transform::from_xyz(300.0, 0.0, 0.0),
-        Tea,
-        GameEntity,
-    ));
+    // ── Turtle ───────────────────────────────────────────────────────────────
+    // Side view, facing right. The parent entity is the logical centre used for
+    // collision; children are purely visual.
+    let t_body   = materials.add(ColorMaterial::from(Color::srgb(0.20, 0.54, 0.12)));
+    let t_shell  = materials.add(ColorMaterial::from(Color::srgb(0.11, 0.34, 0.05)));
+    let t_head   = materials.add(ColorMaterial::from(Color::srgb(0.26, 0.64, 0.16)));
+    let t_eye    = materials.add(ColorMaterial::from(Color::srgb(0.06, 0.06, 0.06)));
+
+    let m_leg    = meshes.add(Ellipse::new(5.0, 11.0));
+    let m_tail   = meshes.add(Ellipse::new(6.0, 4.0));
+    let m_body   = meshes.add(Ellipse::new(26.0, 15.0));
+    let m_shell  = meshes.add(Ellipse::new(20.0, 13.0));
+    let m_neck   = meshes.add(Ellipse::new(7.0, 6.0));
+    let m_head   = meshes.add(Circle::new(10.0));
+    let m_eye    = meshes.add(Circle::new(2.5));
+
+    commands
+        .spawn((
+            Transform::from_xyz(-350.0, 0.0, 0.0),
+            Visibility::default(),
+            Turtle,
+            GameEntity,
+        ))
+        .with_children(|p| {
+            // Four legs behind the body (z = -0.1 so the body ellipse hides their tops).
+            // Back pair angled backward, front pair angled forward.
+            for (x, angle) in [(-13.0_f32, 0.35_f32), (-4.0, 0.15),
+                                (  8.0_f32,-0.15_f32), (18.0,-0.35)] {
+                p.spawn((
+                    Mesh2d(m_leg.clone()),
+                    MeshMaterial2d(t_body.clone()),
+                    Transform::from_xyz(x, -22.0, -0.1)
+                        .with_rotation(Quat::from_rotation_z(angle)),
+                ));
+            }
+            // Tail nub
+            p.spawn((
+                Mesh2d(m_tail),
+                MeshMaterial2d(t_body.clone()),
+                Transform::from_xyz(-30.0, -2.0, -0.1),
+            ));
+            // Body
+            p.spawn((
+                Mesh2d(m_body),
+                MeshMaterial2d(t_body.clone()),
+                Transform::from_xyz(0.0, 0.0, 0.0),
+            ));
+            // Shell dome — slightly above and behind centre
+            p.spawn((
+                Mesh2d(m_shell),
+                MeshMaterial2d(t_shell),
+                Transform::from_xyz(-2.0, 5.0, 0.1),
+            ));
+            // Neck — bridges body to head
+            p.spawn((
+                Mesh2d(m_neck),
+                MeshMaterial2d(t_body.clone()),
+                Transform::from_xyz(22.0, 2.0, 0.05),
+            ));
+            // Head
+            p.spawn((
+                Mesh2d(m_head),
+                MeshMaterial2d(t_head),
+                Transform::from_xyz(30.0, 4.0, 0.0),
+            ));
+            // Eye — forward and slightly above head centre
+            p.spawn((
+                Mesh2d(m_eye),
+                MeshMaterial2d(t_eye),
+                Transform::from_xyz(35.5, 7.5, 0.2),
+            ));
+        });
+
+    // ── Teacup ───────────────────────────────────────────────────────────────
+    let c_porcelain = materials.add(ColorMaterial::from(Color::srgb(0.95, 0.92, 0.87)));
+    let c_shadow    = materials.add(ColorMaterial::from(Color::srgb(0.76, 0.73, 0.68)));
+    let c_tea       = materials.add(ColorMaterial::from(Color::srgb(0.52, 0.28, 0.07)));
+
+    let m_saucer     = meshes.add(Ellipse::new(28.0, 6.0));
+    let m_hbar       = meshes.add(Rectangle::new(5.0, 20.0));
+    let m_harm       = meshes.add(Rectangle::new(10.0, 5.0));
+    let m_cup        = meshes.add(Rectangle::new(30.0, 38.0));
+    let m_tea_surf   = meshes.add(Ellipse::new(12.0, 4.5));
+    let m_rim        = meshes.add(Rectangle::new(34.0, 6.0));
+
+    commands
+        .spawn((
+            Transform::from_xyz(300.0, 0.0, 0.0),
+            Visibility::default(),
+            Tea,
+            GameEntity,
+        ))
+        .with_children(|p| {
+            // Saucer — flat ellipse at the bottom
+            p.spawn((
+                Mesh2d(m_saucer),
+                MeshMaterial2d(c_shadow.clone()),
+                Transform::from_xyz(0.0, -24.0, 0.0),
+            ));
+            // Handle — three rectangles forming a C to the right of the cup.
+            // The vertical bar renders behind the cup body (z = -0.1).
+            p.spawn((
+                Mesh2d(m_hbar),
+                MeshMaterial2d(c_porcelain.clone()),
+                Transform::from_xyz(22.0, 0.0, -0.1),
+            ));
+            p.spawn((
+                Mesh2d(m_harm.clone()),
+                MeshMaterial2d(c_porcelain.clone()),
+                Transform::from_xyz(17.0, 8.5, -0.1),
+            ));
+            p.spawn((
+                Mesh2d(m_harm),
+                MeshMaterial2d(c_porcelain.clone()),
+                Transform::from_xyz(17.0, -8.5, -0.1),
+            ));
+            // Cup body
+            p.spawn((
+                Mesh2d(m_cup),
+                MeshMaterial2d(c_porcelain.clone()),
+                Transform::from_xyz(0.0, -3.0, 0.1),
+            ));
+            // Tea surface visible at the top of the cup interior
+            p.spawn((
+                Mesh2d(m_tea_surf),
+                MeshMaterial2d(c_tea),
+                Transform::from_xyz(0.0, 14.5, 0.2),
+            ));
+            // Rim — slightly wider than the cup, at the top
+            p.spawn((
+                Mesh2d(m_rim),
+                MeshMaterial2d(c_shadow),
+                Transform::from_xyz(0.0, 16.0, 0.3),
+            ));
+        });
 }
 
 fn move_turtle(
