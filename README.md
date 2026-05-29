@@ -6,6 +6,8 @@ A tiny Bevy game. Navigate the turtle to the tea. Drink tea. Win.
 
 ![Gameplay — turtle meets tea](images/gameplay.gif)
 
+![Win Screen](images/win-screen.jpg)
+
 ## Prerequisites
 
 ### 1. Install Rust
