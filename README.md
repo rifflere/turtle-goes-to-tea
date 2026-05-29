@@ -2,6 +2,10 @@
 
 A tiny Bevy game. Navigate the turtle to the tea. Drink tea. Win.
 
+![Main menu](images/menu.jpg)
+
+![Gameplay — turtle meets tea](images/turtle-and-tea.jpg)
+
 ## Prerequisites
 
 ### 1. Install Rust
@@ -71,9 +75,8 @@ grows or shrinks depending on how you're playing:
 | Holding a key down | Momentum brakes almost instantly |
 | Long pause (> 1.5 s) | Step size resets to neutral |
 
-The sweet spot is roughly **one tap every half-second** — like tapping along to a slow,
-calm piece of music. Rush it and you'll barely move. Find the rhythm and the tea
-is yours in seconds.
+The sweet spot is roughly **one tap every half-second**. Rush it and you'll barely
+move. Find the rhythm and the tea is yours in seconds.
 
 ## Project Structure
 
