@@ -2,6 +2,7 @@ use bevy::{prelude::*, sprite::ColorMaterial};
 
 // ── Gameplay constants ────────────────────────────────────────────────────────
 const WINDOW_WIDTH: f32 = 800.0;
+const WINDOW_HEIGHT: f32 = 600.0;
 const TURTLE_RADIUS: f32 = 25.0;
 const TEA_SIZE: f32 = 40.0;
 // Rhythm movement — all distances in pixels, all times in seconds.
@@ -28,8 +29,6 @@ const FRICTION_FREE: f32 = 0.60;
 const VELOCITY_SCALE: f32 = 60.0 * (1.0 - FRICTION_FREE);
 
 // ── App state ─────────────────────────────────────────────────────────────────
-// Bevy's States system lets us switch between distinct modes of the app.
-// Systems can opt in to run only in a specific state.
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
 enum AppState {
     #[default]
@@ -42,24 +41,18 @@ enum AppState {
 #[derive(Component)] struct Turtle;
 #[derive(Component)] struct Tea;
 
-// GameEntity marks everything spawned during gameplay so we can clean it all
-// up in one sweep when leaving the Playing state.
 #[derive(Component)] struct GameEntity;
 
-// These mark the root UI node of each screen so cleanup is trivial.
 #[derive(Component)] struct MenuRoot;
 #[derive(Component)] struct WinRoot;
 
-// Marks the animated title so the glow system can find it.
 #[derive(Component)] struct TitleText;
 
-// Attached to each navigable button. `index` is the button's position in the list.
 #[derive(Component)]
 struct MenuItem {
     index: usize,
 }
 
-// What happens when a button is activated.
 #[derive(Component, Clone, Copy)]
 enum ButtonAction {
     Play,
@@ -69,19 +62,17 @@ enum ButtonAction {
 }
 
 // ── Resources ─────────────────────────────────────────────────────────────────
-// Tracks which button is currently highlighted. Reset each time a new screen opens.
 #[derive(Resource)]
 struct MenuNav {
-    index: usize, // which button is selected
-    max: usize,   // total number of buttons on this screen
+    index: usize,
+    max: usize,
 }
 
-// Drives the rhythm-based movement system.
 #[derive(Resource)]
 struct TurtleMovement {
-    velocity: f32,      // current velocity in pixels per second
-    step_size: f32,     // pixels this tap will contribute (adjusts with rhythm)
-    last_tap_time: f64, // elapsed_secs at the time of the previous tap
+    velocity: f32,
+    step_size: f32,
+    last_tap_time: f64,
 }
 
 impl Default for TurtleMovement {
@@ -94,7 +85,6 @@ impl Default for TurtleMovement {
     }
 }
 
-// Plain function run conditions are more portable than combinator chains.
 fn on_menu_or_win(state: Res<State<AppState>>) -> bool {
     matches!(state.get(), AppState::Menu | AppState::Win)
 }
@@ -105,7 +95,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Turtle Goes to Tea".into(),
-                resolution: (WINDOW_WIDTH, 600.0).into(),
+                resolution: (WINDOW_WIDTH, WINDOW_HEIGHT).into(),
                 ..default()
             }),
             ..default()
@@ -113,16 +103,13 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.22, 0.60, 0.22)))
         .init_state::<AppState>()
         .init_resource::<TurtleMovement>()
-        // Camera lives for the whole session — not tied to any state.
         .add_systems(Startup, spawn_camera)
-        // OnEnter / OnExit run once when transitioning into or out of a state.
         .add_systems(OnEnter(AppState::Menu), spawn_menu)
         .add_systems(OnExit(AppState::Menu), cleanup::<MenuRoot>)
         .add_systems(OnEnter(AppState::Playing), spawn_game)
         .add_systems(OnExit(AppState::Playing), cleanup::<GameEntity>)
         .add_systems(OnEnter(AppState::Win), spawn_win_screen)
         .add_systems(OnExit(AppState::Win), cleanup::<WinRoot>)
-        // Update systems scoped to states via run_if.
         .add_systems(
             Update,
             animate_title.run_if(in_state(AppState::Menu)),
@@ -146,7 +133,6 @@ fn spawn_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
 }
 
-// Generic cleanup: despawns every entity that has component T, including children.
 fn cleanup<T: Component>(mut commands: Commands, query: Query<Entity, With<T>>) {
     for entity in &query {
         commands.entity(entity).despawn_recursive();
@@ -157,8 +143,6 @@ fn cleanup<T: Component>(mut commands: Commands, query: Query<Entity, With<T>>) 
 fn spawn_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(MenuNav { index: 0, max: 2 });
 
-    // Load the whimsical font from assets/fonts/. Falls back gracefully to the
-    // built-in Bevy font if the file isn't present.
     let font = asset_server.load("fonts/whimsical.ttf");
 
     commands
@@ -176,7 +160,6 @@ fn spawn_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
             MenuRoot,
         ))
         .with_children(|root| {
-            // Title — animates between warm gold shades.
             root.spawn((
                 Text::new("Turtle Goes to Tea"),
                 TextFont {
@@ -238,7 +221,6 @@ fn spawn_win_screen(mut commands: Commands, asset_server: Res<AssetServer>) {
         });
 }
 
-// Shared helper — spawns one porcelain button with a text label.
 fn spawn_button(
     parent: &mut ChildBuilder,
     label: &str,
@@ -278,26 +260,23 @@ fn spawn_button(
 
 // ── Menu animation systems ────────────────────────────────────────────────────
 
-// Pulses the title through a range of warm gold shades to suggest a glow.
 fn animate_title(time: Res<Time>, mut query: Query<&mut TextColor, With<TitleText>>) {
     for mut color in &mut query {
-        let t = (time.elapsed_secs() * 1.4).sin() * 0.5 + 0.5; // oscillates 0 → 1
+        let t = (time.elapsed_secs() * 1.4).sin() * 0.5 + 0.5;
         color.0 = Color::srgb(0.98, 0.72 + t * 0.20, 0.08 + t * 0.14);
     }
 }
 
-// Highlights the selected button (brighter porcelain) and dims the rest.
 fn update_button_visuals(nav: Res<MenuNav>, mut query: Query<(&MenuItem, &mut BackgroundColor)>) {
     for (item, mut bg) in &mut query {
         bg.0 = if item.index == nav.index {
-            Color::srgb(0.98, 0.96, 0.91) // bright porcelain — selected
+            Color::srgb(0.98, 0.96, 0.91)
         } else {
-            Color::srgb(0.84, 0.82, 0.77) // dim porcelain — idle
+            Color::srgb(0.84, 0.82, 0.77)
         };
     }
 }
 
-// Gently rotates and scales the selected button back and forth.
 fn wobble_buttons(
     time: Res<Time>,
     nav: Res<MenuNav>,
@@ -320,14 +299,11 @@ fn wobble_buttons(
 fn menu_navigation(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut nav: ResMut<MenuNav>,
-    // Changed<Interaction> means this only yields entities whose interaction
-    // state changed this frame — avoids processing every button every frame.
     interaction_query: Query<(&Interaction, &MenuItem), Changed<Interaction>>,
     button_query: Query<(&MenuItem, &ButtonAction)>,
     mut next_state: ResMut<NextState<AppState>>,
     mut app_exit: EventWriter<AppExit>,
 ) {
-    // Keyboard: up/down arrows or W/S move the highlight.
     if keyboard.just_pressed(KeyCode::ArrowUp) || keyboard.just_pressed(KeyCode::KeyW) {
         nav.index = nav.index.saturating_sub(1);
     }
@@ -335,14 +311,12 @@ fn menu_navigation(
         nav.index = (nav.index + 1).min(nav.max - 1);
     }
 
-    // Mouse hover: whichever button the cursor is over becomes selected.
     for (interaction, item) in &interaction_query {
         if matches!(*interaction, Interaction::Hovered | Interaction::Pressed) {
             nav.index = item.index;
         }
     }
 
-    // Activation: Enter or Space on keyboard, or a mouse click on the highlighted button.
     let confirm_keyboard = keyboard.just_pressed(KeyCode::Enter)
         || keyboard.just_pressed(KeyCode::Space);
     let confirm_mouse = interaction_query
@@ -369,6 +343,32 @@ fn menu_navigation(
     }
 }
 
+// ── Backdrop ──────────────────────────────────────────────────────────────────
+fn spawn_backdrop(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+) {
+    let half_w = WINDOW_WIDTH;
+    let half_h = WINDOW_HEIGHT / 2.0;
+
+    // Sky — top half
+    commands.spawn((
+        Mesh2d(meshes.add(Rectangle::new(half_w, half_h))),
+        MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.53, 0.81, 0.92)))),
+        Transform::from_xyz(0.0, half_h / 2.0, -10.0),
+        GameEntity,
+    ));
+
+    // Ground — bottom half (matches ClearColor so there's never a seam)
+    commands.spawn((
+        Mesh2d(meshes.add(Rectangle::new(half_w, half_h))),
+        MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.22, 0.60, 0.22)))),
+        Transform::from_xyz(0.0, -half_h / 2.0, -10.0),
+        GameEntity,
+    ));
+}
+
 // ── Gameplay ──────────────────────────────────────────────────────────────────
 fn spawn_game(
     mut commands: Commands,
@@ -378,9 +378,9 @@ fn spawn_game(
 ) {
     *movement = TurtleMovement::default();
 
+    spawn_backdrop(&mut commands, &mut meshes, &mut materials);
+
     // ── Turtle ───────────────────────────────────────────────────────────────
-    // Side view, facing right. The parent entity is the logical centre used for
-    // collision; children are purely visual.
     let t_body   = materials.add(ColorMaterial::from(Color::srgb(0.20, 0.54, 0.12)));
     let t_shell  = materials.add(ColorMaterial::from(Color::srgb(0.11, 0.34, 0.05)));
     let t_head   = materials.add(ColorMaterial::from(Color::srgb(0.26, 0.64, 0.16)));
@@ -402,8 +402,6 @@ fn spawn_game(
             GameEntity,
         ))
         .with_children(|p| {
-            // Four legs behind the body (z = -0.1 so the body ellipse hides their tops).
-            // Back pair angled backward, front pair angled forward.
             for (x, angle) in [(-13.0_f32, 0.35_f32), (-4.0, 0.15),
                                 (  8.0_f32,-0.15_f32), (18.0,-0.35)] {
                 p.spawn((
@@ -413,37 +411,31 @@ fn spawn_game(
                         .with_rotation(Quat::from_rotation_z(angle)),
                 ));
             }
-            // Tail nub
             p.spawn((
                 Mesh2d(m_tail),
                 MeshMaterial2d(t_body.clone()),
                 Transform::from_xyz(-30.0, -2.0, -0.1),
             ));
-            // Body
             p.spawn((
                 Mesh2d(m_body),
                 MeshMaterial2d(t_body.clone()),
                 Transform::from_xyz(0.0, 0.0, 0.0),
             ));
-            // Shell dome — slightly above and behind centre
             p.spawn((
                 Mesh2d(m_shell),
                 MeshMaterial2d(t_shell),
                 Transform::from_xyz(-2.0, 5.0, 0.1),
             ));
-            // Neck — bridges body to head
             p.spawn((
                 Mesh2d(m_neck),
                 MeshMaterial2d(t_body.clone()),
                 Transform::from_xyz(22.0, 2.0, 0.05),
             ));
-            // Head
             p.spawn((
                 Mesh2d(m_head),
                 MeshMaterial2d(t_head),
                 Transform::from_xyz(30.0, 4.0, 0.0),
             ));
-            // Eye — forward and slightly above head centre
             p.spawn((
                 Mesh2d(m_eye),
                 MeshMaterial2d(t_eye),
@@ -471,14 +463,11 @@ fn spawn_game(
             GameEntity,
         ))
         .with_children(|p| {
-            // Saucer — flat ellipse at the bottom
             p.spawn((
                 Mesh2d(m_saucer),
                 MeshMaterial2d(c_shadow.clone()),
                 Transform::from_xyz(0.0, -24.0, 0.0),
             ));
-            // Handle — three rectangles forming a C to the right of the cup.
-            // The vertical bar renders behind the cup body (z = -0.1).
             p.spawn((
                 Mesh2d(m_hbar),
                 MeshMaterial2d(c_porcelain.clone()),
@@ -494,19 +483,16 @@ fn spawn_game(
                 MeshMaterial2d(c_porcelain.clone()),
                 Transform::from_xyz(17.0, -8.5, -0.1),
             ));
-            // Cup body
             p.spawn((
                 Mesh2d(m_cup),
                 MeshMaterial2d(c_porcelain.clone()),
                 Transform::from_xyz(0.0, -3.0, 0.1),
             ));
-            // Tea surface visible at the top of the cup interior
             p.spawn((
                 Mesh2d(m_tea_surf),
                 MeshMaterial2d(c_tea),
                 Transform::from_xyz(0.0, 14.5, 0.2),
             ));
-            // Rim — slightly wider than the cup, at the top
             p.spawn((
                 Mesh2d(m_rim),
                 MeshMaterial2d(c_shadow),
@@ -521,21 +507,19 @@ fn move_turtle(
     time: Res<Time>,
     mut movement: ResMut<TurtleMovement>,
 ) {
-    // Distinguish a fresh press from a held key.
     let tapped_left  = keyboard.just_pressed(KeyCode::ArrowLeft)  || keyboard.just_pressed(KeyCode::KeyA);
     let tapped_right = keyboard.just_pressed(KeyCode::ArrowRight) || keyboard.just_pressed(KeyCode::KeyD);
     let held_left    = keyboard.pressed(KeyCode::ArrowLeft)  || keyboard.pressed(KeyCode::KeyA);
     let held_right   = keyboard.pressed(KeyCode::ArrowRight) || keyboard.pressed(KeyCode::KeyD);
 
     let tapped = tapped_left || tapped_right;
-    // "held" is true when a key is down but wasn't *just* pressed this frame.
     let held   = (held_left || held_right) && !tapped;
 
     if tapped {
         let direction: f32 = match (tapped_left, tapped_right) {
             (true, false) => -1.0,
             (false, true) =>  1.0,
-            _ => 0.0, // both simultaneously → no movement
+            _ => 0.0,
         };
 
         if direction != 0.0 {
@@ -543,29 +527,20 @@ fn move_turtle(
             let interval = now - movement.last_tap_time;
             movement.last_tap_time = now;
 
-            // Adjust step_size based on how rhythmic the tapping is.
             movement.step_size = if interval < TOO_FAST_SECS {
-                // Mashing — penalise. Can bottom out at MIN_STEP.
                 (movement.step_size - STEP_PENALTY).max(MIN_STEP)
             } else if (SWEET_LO_SECS..=SWEET_HI_SECS).contains(&interval) {
-                // Sweet spot — reward. Capped at MAX_STEP.
                 (movement.step_size + STEP_REWARD).min(MAX_STEP)
             } else if interval > RHYTHM_RESET_SECS {
-                // Long pause → back to neutral, no bonus or penalty.
                 BASE_STEP
             } else {
-                // Between too-fast and sweet zone: neutral, no change.
                 movement.step_size
             };
 
-            // Set velocity so the natural glide covers roughly step_size pixels.
-            // Derivation: total_distance = velocity / (60 * (1 - FRICTION_FREE)) = velocity / VELOCITY_SCALE
-            // → velocity = step_size * VELOCITY_SCALE
             movement.velocity = direction * movement.step_size * VELOCITY_SCALE;
         }
     }
 
-    // Friction: normalised to 60 fps so speed feels the same at any frame rate.
     let per_frame_decay = if held { FRICTION_HELD } else { FRICTION_FREE };
     movement.velocity *= per_frame_decay.powf(time.delta_secs() * 60.0);
 
